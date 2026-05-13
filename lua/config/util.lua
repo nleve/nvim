@@ -99,4 +99,27 @@ function M.toggle_window_split()
   vim.cmd.buffer(buf1)
 end
 
+function M.window_or_tmux(direction)
+  local directions = {
+    left = { key = 'h', tmux = '-L' },
+    down = { key = 'j', tmux = '-D' },
+    up = { key = 'k', tmux = '-U' },
+    right = { key = 'l', tmux = '-R' },
+  }
+
+  local target = directions[direction]
+  if not target then
+    return
+  end
+
+  local current_win = vim.api.nvim_get_current_win()
+  vim.cmd.wincmd(target.key)
+
+  if vim.api.nvim_get_current_win() ~= current_win or not vim.env.TMUX then
+    return
+  end
+
+  vim.fn.system { 'tmux', 'select-pane', target.tmux }
+end
+
 return M

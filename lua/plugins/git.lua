@@ -1,38 +1,38 @@
 return {
-  {
-    'lewis6991/gitsigns.nvim',
-    event = { 'BufReadPre', 'BufNewFile' },
-    opts = {
-      signs = {
-        add = { text = '+' },
-        change = { text = '~' },
-        delete = { text = '_' },
-        topdelete = { text = '‾' },
-        changedelete = { text = '~' },
-      },
-      numhl = true,
-    },
-  },
+	{
+		"lewis6991/gitsigns.nvim",
+		event = { "BufReadPre", "BufNewFile" },
+		opts = {
+			signs = {
+				add = { text = "+" },
+				change = { text = "~" },
+				delete = { text = "_" },
+				topdelete = { text = "‾" },
+				changedelete = { text = "~" },
+			},
+			numhl = true,
+		},
+	},
 
-  {
-    'NeogitOrg/neogit',
-    cmd = 'Neogit',
-    dependencies = {
-      'nvim-lua/plenary.nvim',
-      'sindrets/diffview.nvim',
-      'nvim-telescope/telescope.nvim',
-    },
-    opts = {
-      kind = 'tab',
-      disable_hint = true,
-      integrations = { diffview = true, telescope = true },
-    },
-  },
+	{
+		"NeogitOrg/neogit",
+		cmd = "Neogit",
+		dependencies = {
+			"nvim-lua/plenary.nvim",
+			"sindrets/diffview.nvim",
+			"nvim-telescope/telescope.nvim",
+		},
+		opts = {
+			kind = "tab",
+			disable_hint = true,
+			integrations = { diffview = true, telescope = true },
+		},
+	},
 
-  {
-    'sindrets/diffview.nvim',
-    cmd = { 'DiffviewOpen', 'DiffviewFileHistory' },
-    dependencies = { 'nvim-lua/plenary.nvim' },
-    opts = {},
-  },
+	{
+		"sindrets/diffview.nvim",
+		cmd = { "DiffviewOpen", "DiffviewFileHistory" },
+		dependencies = { "nvim-lua/plenary.nvim" },
+		opts = {},
+	},
 }

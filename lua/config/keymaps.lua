@@ -14,10 +14,18 @@ map('n', '[d', vim.diagnostic.goto_prev, { desc = 'Prev diagnostic' })
 map('n', ']d', vim.diagnostic.goto_next, { desc = 'Next diagnostic' })
 map('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Diagnostics (loclist)' })
 
-map('n', '<A-h>', '<C-w>h', { desc = 'Window left' })
-map('n', '<A-j>', '<C-w>j', { desc = 'Window down' })
-map('n', '<A-k>', '<C-w>k', { desc = 'Window up' })
-map('n', '<A-l>', '<C-w>l', { desc = 'Window right' })
+map('n', '<A-h>', function()
+  util.window_or_tmux 'left'
+end, { desc = 'Window left' })
+map('n', '<A-j>', function()
+  util.window_or_tmux 'down'
+end, { desc = 'Window down' })
+map('n', '<A-k>', function()
+  util.window_or_tmux 'up'
+end, { desc = 'Window up' })
+map('n', '<A-l>', function()
+  util.window_or_tmux 'right'
+end, { desc = 'Window right' })
 
 map('n', '<leader>i', function()
   vim.cmd.edit(vim.fn.stdpath('config') .. '/init.lua')
