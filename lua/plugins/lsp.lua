@@ -64,9 +64,15 @@ return {
             },
           },
         },
-        pyright = {},
+        zuban = {},
         rust_analyzer = {},
-        ts_ls = {},
+        vtsls = {
+          settings = {
+            vtsls = {
+              autoUseWorkspaceTsdk = true,
+            },
+          },
+        },
         zls = {},
       }
 
@@ -76,13 +82,14 @@ return {
       vim.list_extend(ensure_installed, { 'stylua' })
       require('mason-tool-installer').setup({ ensure_installed = ensure_installed })
 
+      for server_name, server in pairs(servers) do
+        server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
+        vim.lsp.config(server_name, server)
+      end
+
       require('mason-lspconfig').setup({
-        handlers = {
-          function(server_name)
-            local server = servers[server_name] or {}
-            server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
-            require('lspconfig')[server_name].setup(server)
-          end,
+        automatic_enable = {
+          exclude = { 'pyright', 'ts_ls' },
         },
       })
     end,
