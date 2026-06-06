@@ -3,9 +3,10 @@ local M = {}
 local defaults = {
   default_agent = 'codex',
   split_size = '40%',
-  paste_delay_ms = 400,
+  paste_delay_ms = 0,
+  new_pane_paste_delay_ms = 0,
   startup_timeout_ms = 5000,
-  startup_poll_ms = 100,
+  startup_poll_ms = 50,
   pane_picker_window_style = 'fg=colour16,bg=colour226,bold',
   pane_picker_window_format = '>>> #I:#W <<<',
   pane_preview_lines = 20,
@@ -327,6 +328,7 @@ local function collect_context(opts)
     return {
       kind = 'selection',
       label = label_path .. ':' .. start_line .. '-' .. end_line,
+      cwd = cwd,
       text = table.concat(parts, '\n'),
     }
   elseif opts.include_buffer then
@@ -339,6 +341,7 @@ local function collect_context(opts)
     return {
       kind = 'buffer',
       label = label_path .. ' contents',
+      cwd = cwd,
       text = table.concat(parts, '\n'),
     }
   else
@@ -350,6 +353,7 @@ local function collect_context(opts)
     return {
       kind = 'file',
       label = label_path,
+      cwd = cwd,
       text = table.concat(parts, '\n'),
     }
   end
@@ -365,6 +369,14 @@ local function context_text(context)
   end
 
   return ''
+end
+
+local function context_cwd(context)
+  if type(context) == 'table' and type(context.cwd) == 'string' and context.cwd ~= '' then
+    return context.cwd
+  end
+
+  return nil
 end
 
 local function build_prompt(instructions, context)
@@ -523,14 +535,18 @@ local function current_session_name()
   return output
 end
 
-local function list_panes()
+local function list_panes(scope)
   if vim.fn.executable('tmux') ~= 1 or not vim.env.TMUX_PANE then
     return {}
   end
 
-  local current_session = current_session_name()
-  if not current_session then
-    return {}
+  scope = scope or 'session'
+  local current_session
+  if scope == 'session' then
+    current_session = current_session_name()
+    if not current_session then
+      return {}
+    end
   end
 
   local sep = '\31'
@@ -551,7 +567,15 @@ local function list_panes()
     '#{@agent-harness}',
   }
 
-  local ok, output = system({ 'tmux', 'list-panes', '-s', '-t', current_session, '-F', table.concat(fields, sep) })
+  local args = { 'tmux', 'list-panes' }
+  if scope == 'session' then
+    vim.list_extend(args, { '-s', '-t', current_session })
+  else
+    vim.list_extend(args, { '-t', vim.env.TMUX_PANE })
+  end
+  vim.list_extend(args, { '-F', table.concat(fields, sep) })
+
+  local ok, output = system(args)
   if not ok or output == '' then
     return {}
   end
@@ -577,7 +601,7 @@ local function list_panes()
     }
     pane.location = pane.session .. ':' .. pane.window_index .. '.' .. pane.pane_index
 
-    if pane.id ~= '' and pane.session == current_session then
+    if pane.id ~= '' and (not current_session or pane.session == current_session) then
       table.insert(panes, pane)
     end
   end
@@ -689,12 +713,12 @@ local function pane_agent_match_kind(pane, agent_name, agent)
   return nil
 end
 
-local function find_pane(pane_id)
+local function find_pane(pane_id, panes)
   if not pane_id or pane_id == '' then
     return nil
   end
 
-  for _, pane in ipairs(list_panes()) do
+  for _, pane in ipairs(panes or list_panes()) do
     if pane.id == pane_id then
       return pane
     end
@@ -703,13 +727,13 @@ local function find_pane(pane_id)
   return nil
 end
 
-local function current_window_id()
-  local pane = find_pane(vim.env.TMUX_PANE)
+local function current_window_id(panes)
+  local pane = find_pane(vim.env.TMUX_PANE, panes)
   return pane and pane.window_id or nil
 end
 
-local function pane_in_current_window(pane)
-  local window = current_window_id()
+local function pane_in_current_window(pane, current_window)
+  local window = current_window or current_window_id()
   return not window or pane.window_id == window
 end
 
@@ -813,26 +837,28 @@ local function highlight_window(window, state)
   end
 end
 
-local function find_agent_panes(agent_name, agent)
+local function find_agent_panes(agent_name, agent, all_panes)
   local panes = {}
-  for _, pane in ipairs(list_panes()) do
+  for _, pane in ipairs(all_panes or list_panes()) do
     local match_kind = pane_agent_match_kind(pane, agent_name, agent)
     if match_kind then
-      pane.agent_match_kind = match_kind
-      table.insert(panes, pane)
+      local matched_pane = vim.tbl_extend('force', {}, pane)
+      matched_pane.agent_match_kind = match_kind
+      table.insert(panes, matched_pane)
     end
   end
 
   return panes
 end
 
-local function find_all_agent_panes()
+local function find_all_agent_panes(all_panes)
+  all_panes = all_panes or list_panes()
   local panes = {}
   local seen = {}
 
   for _, agent_name in ipairs(agent_names()) do
     local _, agent = resolve_agent_config(agent_name)
-    for _, pane in ipairs(find_agent_panes(agent_name, agent)) do
+    for _, pane in ipairs(find_agent_panes(agent_name, agent, all_panes)) do
       if not seen[pane.id] then
         seen[pane.id] = true
         pane.harness_agent_name = agent_name
@@ -843,7 +869,7 @@ local function find_all_agent_panes()
     end
   end
 
-  local current_window = current_window_id()
+  local current_window = current_window_id(all_panes)
   local function is_current_window(pane)
     return not current_window or pane.window_id == current_window
   end
@@ -862,18 +888,19 @@ local function find_all_agent_panes()
     return left.harness_agent_label < right.harness_agent_label
   end)
 
-  return panes
+  return panes, current_window
 end
 
 local function focus_pane(pane)
-  local target = find_pane(pane)
+  local panes = list_panes()
+  local target = find_pane(pane, panes)
   if not target then
     notify('Agent tmux pane is no longer available', vim.log.levels.ERROR)
     return false
   end
 
   local switched = true
-  if target.window_id ~= current_window_id() then
+  if target.window_id ~= current_window_id(panes) then
     local ok, output = system({ 'tmux', 'switch-client', '-t', target.session .. ':' .. target.window_index })
     if not ok then
       notify('Failed to switch to agent tmux window: ' .. output, vim.log.levels.ERROR)
@@ -890,12 +917,12 @@ local function focus_pane(pane)
   return switched
 end
 
-local function start_pane(agent_name, agent, initial_prompt)
+local function start_pane(agent_name, agent, initial_prompt, cwd)
   if not tmux_ready() then
     return nil
   end
 
-  local cwd = project_root(0)
+  cwd = cwd or project_root(0)
   local args = {
     'tmux',
     'split-window',
@@ -1227,7 +1254,7 @@ local function select_open_agent(panes, on_choice)
   end)
 end
 
-local function use_open_agent_choice(choice, on_pane, start_prompt)
+local function use_open_agent_choice(choice, on_pane, start_prompt, start_cwd)
   if not choice then
     on_pane(nil)
     return
@@ -1241,7 +1268,7 @@ local function use_open_agent_choice(choice, on_pane, start_prompt)
   end
 
   if choice.start_new then
-    local pane, new_pane, prompt_sent = start_pane(agent_name, agent, start_prompt)
+    local pane, new_pane, prompt_sent = start_pane(agent_name, agent, start_prompt, start_cwd)
     on_pane(agent_name, agent, pane, new_pane, prompt_sent)
     return
   end
@@ -1255,12 +1282,12 @@ local function use_open_agent_choice(choice, on_pane, start_prompt)
     state.pane_by_agent[agent_name] = nil
     notify('Selected tmux pane is no longer available', vim.log.levels.WARN)
     select_open_agent(find_all_agent_panes(), function(next_choice)
-      use_open_agent_choice(next_choice, on_pane, start_prompt)
+      use_open_agent_choice(next_choice, on_pane, start_prompt, start_cwd)
     end)
   end
 end
 
-local function get_dwim_agent_pane(opts, on_pane, start_prompt)
+local function get_dwim_agent_pane(opts, on_pane, start_prompt, start_cwd)
   opts = opts or {}
   on_pane = on_pane or function() end
 
@@ -1276,25 +1303,35 @@ local function get_dwim_agent_pane(opts, on_pane, start_prompt)
       return
     end
 
-    local pane, new_pane, prompt_sent = start_pane(agent_name, agent, start_prompt)
+    local pane, new_pane, prompt_sent = start_pane(agent_name, agent, start_prompt, start_cwd)
     on_pane(agent_name, agent, pane, new_pane, prompt_sent)
     return
   end
 
-  local panes = find_all_agent_panes()
-  local function choose()
+  local function choose(panes)
     select_open_agent(panes, function(choice)
-      use_open_agent_choice(choice, on_pane, start_prompt)
+      use_open_agent_choice(choice, on_pane, start_prompt, start_cwd)
     end)
   end
 
   if opts.choose then
-    choose()
+    choose(find_all_agent_panes())
     return
   end
 
+  local current_window_panes = find_all_agent_panes(list_panes('window'))
+  if #current_window_panes == 1 then
+    use_open_agent_choice({
+      pane = current_window_panes[1],
+      agent_name = current_window_panes[1].harness_agent_name,
+      agent = current_window_panes[1].harness_agent,
+      label = current_window_panes[1].harness_agent_label,
+    }, on_pane, start_prompt, start_cwd)
+    return
+  end
+
+  local panes, current_window = find_all_agent_panes()
   local current_window_panes = {}
-  local current_window = current_window_id()
   for _, pane in ipairs(panes) do
     if not current_window or pane.window_id == current_window then
       table.insert(current_window_panes, pane)
@@ -1307,7 +1344,7 @@ local function get_dwim_agent_pane(opts, on_pane, start_prompt)
       agent_name = current_window_panes[1].harness_agent_name,
       agent = current_window_panes[1].harness_agent,
       label = current_window_panes[1].harness_agent_label,
-    }, on_pane, start_prompt)
+    }, on_pane, start_prompt, start_cwd)
     return
   end
 
@@ -1317,14 +1354,14 @@ local function get_dwim_agent_pane(opts, on_pane, start_prompt)
       agent_name = panes[1].harness_agent_name,
       agent = panes[1].harness_agent,
       label = panes[1].harness_agent_label,
-    }, on_pane, start_prompt)
+    }, on_pane, start_prompt, start_cwd)
     return
   end
 
-  choose()
+  choose(panes)
 end
 
-local function get_or_start_pane(agent_name, agent, force, on_pane, start_prompt)
+local function get_or_start_pane(agent_name, agent, force, on_pane, start_prompt, start_cwd)
   on_pane = on_pane or function() end
 
   if not tmux_ready() then
@@ -1332,17 +1369,24 @@ local function get_or_start_pane(agent_name, agent, force, on_pane, start_prompt
     return
   end
 
-  local pane = state.pane_by_agent[agent_name]
-  local remembered_pane = find_pane(pane)
-  local remembered_match_kind = remembered_pane and pane_agent_match_kind(remembered_pane, agent_name, agent)
-
   if force then
-    on_pane(start_pane(agent_name, agent, start_prompt))
+    on_pane(start_pane(agent_name, agent, start_prompt, start_cwd))
     return
   end
 
-  local panes = find_agent_panes(agent_name, agent)
-  if remembered_pane and remembered_match_kind == 'exact' and pane_in_current_window(remembered_pane) and #panes <= 1 then
+  local all_panes = list_panes()
+  local current_window = current_window_id(all_panes)
+  local pane = state.pane_by_agent[agent_name]
+  local remembered_pane = find_pane(pane, all_panes)
+  local remembered_match_kind = remembered_pane and pane_agent_match_kind(remembered_pane, agent_name, agent)
+
+  local panes = find_agent_panes(agent_name, agent, all_panes)
+  if
+    remembered_pane
+    and remembered_match_kind == 'exact'
+    and pane_in_current_window(remembered_pane, current_window)
+    and #panes <= 1
+  then
     on_pane(remembered_pane.id, false)
     return
   end
@@ -1358,7 +1402,7 @@ local function get_or_start_pane(agent_name, agent, force, on_pane, start_prompt
     end
 
     if choice.start_new then
-      on_pane(start_pane(agent_name, agent, start_prompt))
+      on_pane(start_pane(agent_name, agent, start_prompt, start_cwd))
       return
     end
 
@@ -1370,12 +1414,12 @@ local function get_or_start_pane(agent_name, agent, force, on_pane, start_prompt
     else
       state.pane_by_agent[agent_name] = nil
       notify('Selected tmux pane is no longer available', vim.log.levels.WARN)
-      get_or_start_pane(agent_name, agent, false, on_pane)
+      get_or_start_pane(agent_name, agent, false, on_pane, start_prompt, start_cwd)
     end
   end
 
   if #panes == 1 then
-    if panes[1].agent_match_kind == 'exact' and pane_in_current_window(panes[1]) then
+    if panes[1].agent_match_kind == 'exact' and pane_in_current_window(panes[1], current_window) then
       state.pane_by_agent[agent_name] = panes[1].id
       tag_pane(agent_name, panes[1].id)
       on_pane(panes[1].id, false)
@@ -1391,7 +1435,7 @@ local function get_or_start_pane(agent_name, agent, force, on_pane, start_prompt
     return
   end
 
-  on_pane(start_pane(agent_name, agent, start_prompt))
+  on_pane(start_pane(agent_name, agent, start_prompt, start_cwd))
 end
 
 local function pane_target_error(output)
@@ -1405,19 +1449,35 @@ local function pane_has_visible_content(pane)
 end
 
 local function pane_is_agent_process(pane, agent)
-  local ok, output = system({ 'tmux', 'display-message', '-p', '-t', pane, '#{pane_current_command}' })
+  local sep = '\31'
+  local fields = {
+    '#{pane_current_command}',
+    '#{pane_start_command}',
+    '#{pane_tty}',
+    '#{@agent-harness}',
+  }
+  local ok, output = system({ 'tmux', 'display-message', '-p', '-t', pane, table.concat(fields, sep) })
   if not ok then
-    return false
+    return nil
   end
 
-  local current_command = command_name(output)
-  for _, process_name in ipairs(agent_process_names(agent)) do
-    if current_command == process_name then
-      return true
-    end
+  local parts = vim.split(output, sep, { plain = true, trimempty = false })
+  return pane_agent_match_kind({
+    current_command = parts[1] or '',
+    start_command = parts[2] or '',
+    tty = parts[3] or '',
+    agent_name = parts[4] or '',
+  }, agent.profile_name or agent.base_name or '', agent) ~= nil
+end
+
+local function paste_delay_ms(new_pane)
+  local delay = new_pane and M.options.new_pane_paste_delay_ms or M.options.paste_delay_ms
+  if delay == nil and new_pane then
+    delay = M.options.paste_delay_ms
   end
 
-  return false
+  delay = tonumber(delay) or 0
+  return math.max(0, delay)
 end
 
 local function wait_for_new_pane(pane, agent, on_ready, on_missing)
@@ -1443,7 +1503,8 @@ local function wait_for_new_pane(pane, agent, on_ready, on_missing)
     0,
     poll,
     vim.schedule_wrap(function()
-      if not pane_alive(pane) then
+      local is_agent_process = pane_is_agent_process(pane, agent)
+      if is_agent_process == nil then
         finish(function()
           if on_missing then
             on_missing()
@@ -1452,7 +1513,7 @@ local function wait_for_new_pane(pane, agent, on_ready, on_missing)
         return
       end
 
-      if pane_is_agent_process(pane, agent) and pane_has_visible_content(pane) then
+      if is_agent_process and pane_has_visible_content(pane) then
         finish(on_ready)
         return
       end
@@ -1473,16 +1534,6 @@ local function paste_to_pane(pane, text, agent, new_pane, submit, on_done, on_mi
   end
 
   local function paste()
-    if not pane_alive(pane) then
-      system({ 'tmux', 'delete-buffer', '-b', buffer_name })
-      if on_missing then
-        on_missing()
-      else
-        notify('Agent tmux pane is no longer available', vim.log.levels.ERROR)
-      end
-      return
-    end
-
     local paste_ok, paste_output = system({
       'tmux',
       'paste-buffer',
@@ -1524,7 +1575,12 @@ local function paste_to_pane(pane, text, agent, new_pane, submit, on_done, on_mi
   end
 
   local function defer_paste()
-    vim.defer_fn(paste, M.options.paste_delay_ms)
+    local delay = paste_delay_ms(new_pane)
+    if delay == 0 then
+      paste()
+    else
+      vim.defer_fn(paste, delay)
+    end
   end
 
   if new_pane then
@@ -1579,7 +1635,7 @@ function M.start(opts)
     return
   end
 
-  local pane = start_pane(agent_name, agent, opts.initial_prompt)
+  local pane = start_pane(agent_name, agent, opts.initial_prompt, opts.cwd)
   if pane then
     if opts.focus then
       focus_pane(pane)
@@ -1597,6 +1653,7 @@ function M.send(opts)
   end
 
   local prompt = opts.prompt or build_prompt(opts.instructions or '', context)
+  local start_cwd = opts.cwd or context_cwd(context)
   local retried = false
 
   local function send_to_pane(agent_name, agent, pane, new_pane, prompt_sent)
@@ -1622,9 +1679,9 @@ function M.send(opts)
       if opts.agent then
         get_or_start_pane(agent_name, agent, false, function(next_pane, next_new_pane, next_prompt_sent)
           send_to_pane(agent_name, agent, next_pane, next_new_pane, next_prompt_sent)
-        end, prompt)
+        end, prompt, start_cwd)
       else
-        get_dwim_agent_pane(opts, send_to_pane, prompt)
+        get_dwim_agent_pane(opts, send_to_pane, prompt, start_cwd)
       end
     end)
   end
@@ -1637,9 +1694,9 @@ function M.send(opts)
 
     get_or_start_pane(agent_name, agent, opts.force, function(pane, new_pane, prompt_sent)
       send_to_pane(agent_name, agent, pane, new_pane, prompt_sent)
-    end, prompt)
+    end, prompt, start_cwd)
   else
-    get_dwim_agent_pane(opts, send_to_pane, prompt)
+    get_dwim_agent_pane(opts, send_to_pane, prompt, start_cwd)
   end
 end
 
@@ -1658,6 +1715,7 @@ function M.send_context(opts)
   end
 
   prompt = prompt .. '\n\n'
+  local start_cwd = opts.cwd or context_cwd(context)
   local retried = false
 
   local function stage_in_pane(agent_name, agent, pane, new_pane)
@@ -1679,9 +1737,9 @@ function M.send_context(opts)
       if opts.agent then
         get_or_start_pane(agent_name, agent, false, function(next_pane, next_new_pane)
           stage_in_pane(agent_name, agent, next_pane, next_new_pane)
-        end)
+        end, nil, start_cwd)
       else
-        get_dwim_agent_pane(opts, stage_in_pane)
+        get_dwim_agent_pane(opts, stage_in_pane, nil, start_cwd)
       end
     end)
   end
@@ -1694,9 +1752,9 @@ function M.send_context(opts)
 
     get_or_start_pane(agent_name, agent, opts.force, function(pane, new_pane)
       stage_in_pane(agent_name, agent, pane, new_pane)
-    end)
+    end, nil, start_cwd)
   else
-    get_dwim_agent_pane(opts, stage_in_pane)
+    get_dwim_agent_pane(opts, stage_in_pane, nil, start_cwd)
   end
 end
 
