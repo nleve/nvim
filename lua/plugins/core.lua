@@ -27,6 +27,7 @@ return {
       wk.setup(opts)
 
         wk.add {
+          { '<leader>a', group = 'Agent' },
           { '<leader>c', group = 'Code' },
           { '<leader>f', group = 'Find' },
           { '<leader>r', group = 'Reload' },

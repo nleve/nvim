@@ -1,4 +1,5 @@
 local map = vim.keymap.set
+local agents = require 'agent_harness'
 local util = require 'config.util'
 
 map('n', '<Esc>', '<cmd>nohlsearch<CR>')
@@ -251,9 +252,25 @@ map('n', '<leader>tt', function()
   require('config.util').float_term { title = 'shell' }
 end, { desc = 'Terminal (float)' })
 
+map('n', '<leader>aa', function()
+  agents.prompt()
+end, { desc = 'Agent ask' })
+
+map('x', '<leader>aa', ":'<,'>AgentAsk<CR>", { desc = 'Agent ask selection' })
+
+map('n', '<leader>aA', function()
+  agents.prompt { choose_agent = true }
+end, { desc = 'Agent ask (choose)' })
+
+map('n', '<leader>af', '<cmd>AgentAsk!<CR>', { desc = 'Agent ask with file contents' })
+map('n', '<leader>an', '<cmd>AgentAskNoContext<CR>', { desc = 'Agent ask without context' })
+map('n', '<leader>as', '<cmd>AgentStart<CR>', { desc = 'Agent start' })
+map('n', '<leader>aS', '<cmd>AgentStart!<CR>', { desc = 'Agent start new pane' })
+map('n', '<leader>ac', '<cmd>AgentSelect<CR>', { desc = 'Agent select' })
+
 map('n', '<leader>rr', function()
   for name, _ in pairs(package.loaded) do
-    if name:match '^config%.' then
+    if name:match '^config%.' or name:match '^agent_harness' then
       package.loaded[name] = nil
     end
   end
