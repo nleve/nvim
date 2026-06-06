@@ -10,7 +10,7 @@ function M.lazy_load(plugins)
     plugins = { plugins }
   end
 
-  lazy.load { plugins = plugins }
+  lazy.load({ plugins = plugins })
 end
 
 function M.project_root(bufnr)

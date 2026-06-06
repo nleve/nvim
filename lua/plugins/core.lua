@@ -11,7 +11,7 @@ return {
     },
     config = function(_, opts)
       require('tokyonight').setup(opts)
-      vim.cmd.colorscheme 'tokyonight'
+      vim.cmd.colorscheme('tokyonight')
     end,
   },
 
@@ -23,28 +23,29 @@ return {
       icons = { mappings = vim.g.have_nerd_font },
     },
     config = function(_, opts)
-      local wk = require 'which-key'
+      local wk = require('which-key')
       wk.setup(opts)
 
-        wk.add {
-          { '<leader>a', group = 'Agent' },
-          { '<leader>c', group = 'Code' },
-          { '<leader>f', group = 'Find' },
-          { '<leader>r', group = 'Reload' },
-          { '<leader>b', group = 'Buffers' },
-          { '<leader>g', group = 'Git' },
-          { '<leader>t', group = 'Terminal' },
-          { '<leader>w', group = 'Windows' },
-          { '<leader>/', group = 'Search' },
-        }
-      end,
-    },
+      wk.add({
+        { '<leader>a', group = 'Agent' },
+        { '<leader>c', group = 'Code' },
+        { '<leader>d', group = 'Diagnostics' },
+        { '<leader>f', group = 'Find' },
+        { '<leader>r', group = 'Reload' },
+        { '<leader>b', group = 'Buffers' },
+        { '<leader>g', group = 'Git' },
+        { '<leader>t', group = 'Terminal' },
+        { '<leader>w', group = 'Windows' },
+        { '<leader>/', group = 'Search' },
+      })
+    end,
+  },
 
   {
     'echasnovski/mini.nvim',
     event = 'VeryLazy',
     config = function()
-      require('mini.ai').setup { n_lines = 500 }
+      require('mini.ai').setup({ n_lines = 500 })
       require('mini.surround').setup()
       require('mini.comment').setup()
     end,
@@ -55,8 +56,22 @@ return {
     event = 'VeryLazy',
     opts = {},
     keys = {
-      { 's', function() require('flash').jump() end, mode = { 'n', 'x', 'o' }, desc = 'Flash' },
-      { 'S', function() require('flash').treesitter() end, mode = { 'n', 'x', 'o' }, desc = 'Flash treesitter' },
+      {
+        's',
+        function()
+          require('flash').jump()
+        end,
+        mode = { 'n', 'x', 'o' },
+        desc = 'Flash',
+      },
+      {
+        'S',
+        function()
+          require('flash').treesitter()
+        end,
+        mode = { 'n', 'x', 'o' },
+        desc = 'Flash treesitter',
+      },
     },
   },
 

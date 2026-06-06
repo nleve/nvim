@@ -1,18 +1,30 @@
 return {
-	{
-		"lewis6991/gitsigns.nvim",
-		event = { "BufReadPre", "BufNewFile" },
-		opts = {
-			signs = {
-				add = { text = "+" },
-				change = { text = "~" },
-				delete = { text = "_" },
-				topdelete = { text = "‾" },
-				changedelete = { text = "~" },
-			},
-			numhl = true,
-		},
-	},
+  {
+    'barrettruth/diffs.nvim',
+    lazy = false,
+    init = function()
+      vim.g.diffs = {
+        integrations = {
+          neogit = true,
+          gitsigns = true,
+        },
+      }
+    end,
+  },
+  {
+    'lewis6991/gitsigns.nvim',
+    event = { 'BufReadPre', 'BufNewFile' },
+    opts = {
+      signs = {
+        add = { text = '+' },
+        change = { text = '~' },
+        delete = { text = '_' },
+        topdelete = { text = '‾' },
+        changedelete = { text = '~' },
+      },
+      numhl = true,
+    },
+  },
 
 	{
 		"NeogitOrg/neogit",

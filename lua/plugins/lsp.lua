@@ -20,9 +20,15 @@ return {
             vim.keymap.set(mode, lhs, rhs, { buffer = buf, desc = desc })
           end
 
-          bmap('n', 'gd', function() require('telescope.builtin').lsp_definitions() end, 'LSP: Definition')
-          bmap('n', 'gr', function() require('telescope.builtin').lsp_references() end, 'LSP: References')
-          bmap('n', 'gI', function() require('telescope.builtin').lsp_implementations() end, 'LSP: Implementation')
+          bmap('n', 'gd', function()
+            require('telescope.builtin').lsp_definitions()
+          end, 'LSP: Definition')
+          bmap('n', 'gr', function()
+            require('telescope.builtin').lsp_references()
+          end, 'LSP: References')
+          bmap('n', 'gI', function()
+            require('telescope.builtin').lsp_implementations()
+          end, 'LSP: Implementation')
           bmap('n', '<leader>ca', vim.lsp.buf.code_action, 'Code action')
           bmap('n', '<leader>cr', vim.lsp.buf.rename, 'Rename')
           bmap('n', 'K', vim.lsp.buf.hover, 'Hover')
@@ -42,7 +48,19 @@ return {
         lua_ls = {
           settings = {
             Lua = {
+              runtime = {
+                version = 'LuaJIT',
+              },
               completion = { callSnippet = 'Replace' },
+              diagnostics = {
+                globals = { 'vim' },
+              },
+              workspace = {
+                checkThirdParty = false,
+                library = {
+                  vim.env.VIMRUNTIME,
+                },
+              },
             },
           },
         },
@@ -56,9 +74,9 @@ return {
 
       local ensure_installed = vim.tbl_keys(servers)
       vim.list_extend(ensure_installed, { 'stylua' })
-      require('mason-tool-installer').setup { ensure_installed = ensure_installed }
+      require('mason-tool-installer').setup({ ensure_installed = ensure_installed })
 
-      require('mason-lspconfig').setup {
+      require('mason-lspconfig').setup({
         handlers = {
           function(server_name)
             local server = servers[server_name] or {}
@@ -66,7 +84,7 @@ return {
             require('lspconfig')[server_name].setup(server)
           end,
         },
-      }
+      })
     end,
   },
 
@@ -78,7 +96,7 @@ return {
       {
         '<leader>cf',
         function()
-          require('conform').format { async = true, lsp_format = 'fallback' }
+          require('conform').format({ async = true, lsp_format = 'fallback' })
         end,
         desc = 'Format',
       },
@@ -88,6 +106,18 @@ return {
       format_on_save = function()
         return { timeout_ms = 500, lsp_format = 'fallback' }
       end,
+      formatters = {
+        stylua = {
+          prepend_args = {
+            '--indent-type',
+            'Spaces',
+            '--indent-width',
+            '2',
+            '--quote-style',
+            'AutoPreferSingle',
+          },
+        },
+      },
       formatters_by_ft = {
         lua = { 'stylua' },
       },

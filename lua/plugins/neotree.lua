@@ -18,7 +18,19 @@ return {
       },
       default_component_configs = {
         indent = { with_markers = true },
-        git_status = { symbols = { added = 'A', modified = 'M', deleted = 'D', renamed = 'R', untracked = '?', ignored = 'I', unstaged = 'U', staged = 'S', conflict = '!' } },
+        git_status = {
+          symbols = {
+            added = 'A',
+            modified = 'M',
+            deleted = 'D',
+            renamed = 'R',
+            untracked = '?',
+            ignored = 'I',
+            unstaged = 'U',
+            staged = 'S',
+            conflict = '!',
+          },
+        },
       },
     },
   },

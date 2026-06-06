@@ -1,3 +1,4 @@
+local vim = vim
 vim.g.mapleader = ' '
 vim.g.maplocalleader = ','
 
@@ -5,6 +6,9 @@ vim.g.have_nerd_font = true
 
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
+
+local set = vim.opt -- set options
+set.fillchars = set.fillchars + 'diff:╱'
 
 require('config.options')
 require('config.autocmds')
@@ -14,14 +18,14 @@ local lazypath = vim.fn.stdpath('data') .. '/lazy/lazy.nvim'
 local uv = vim.uv or vim.loop
 
 if not uv.fs_stat(lazypath) then
-  local out = vim.fn.system {
+  local out = vim.fn.system({
     'git',
     'clone',
     '--filter=blob:none',
     '--branch=stable',
     'https://github.com/folke/lazy.nvim.git',
     lazypath,
-  }
+  })
   if vim.v.shell_error ~= 0 then
     error('lazy.nvim bootstrap failed:\n' .. out)
   end

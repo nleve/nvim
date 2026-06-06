@@ -8,7 +8,7 @@ return {
         'nvim-telescope/telescope-fzf-native.nvim',
         build = 'make',
         cond = function()
-          return vim.fn.executable 'make' == 1
+          return vim.fn.executable('make') == 1
         end,
       },
       'nvim-telescope/telescope-ui-select.nvim',
@@ -16,8 +16,8 @@ return {
       'debugloop/telescope-undo.nvim',
     },
     opts = function()
-      local actions = require 'telescope.actions'
-      local themes = require 'telescope.themes'
+      local actions = require('telescope.actions')
+      local themes = require('telescope.themes')
 
       return {
         defaults = {
@@ -51,7 +51,7 @@ return {
       }
     end,
     config = function(_, opts)
-      local telescope = require 'telescope'
+      local telescope = require('telescope')
       telescope.setup(opts)
 
       pcall(telescope.load_extension, 'fzf')
