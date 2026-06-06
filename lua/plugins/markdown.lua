@@ -7,6 +7,16 @@ return {
       'nvim-treesitter/nvim-treesitter',
       'nvim-tree/nvim-web-devicons',
     },
-    opts = {},
+    opts = {
+      overrides = {
+        buftype = {
+          nofile = {
+            code = {
+              language = false,
+            },
+          },
+        },
+      },
+    },
   },
 }
