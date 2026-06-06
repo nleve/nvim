@@ -34,7 +34,7 @@ return {
           bmap('n', 'K', vim.lsp.buf.hover, 'Hover')
           bmap('n', '<C-k>', vim.lsp.buf.signature_help, 'Signature help')
 
-          if client and client.supports_method(vim.lsp.protocol.Methods.textDocument_inlayHint) then
+          if client and client:supports_method(vim.lsp.protocol.Methods.textDocument_inlayHint) then
             vim.lsp.inlay_hint.enable(false, { bufnr = buf })
           end
         end,
