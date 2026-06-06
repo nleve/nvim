@@ -6,6 +6,9 @@ local defaults = {
   paste_delay_ms = 400,
   startup_timeout_ms = 5000,
   startup_poll_ms = 100,
+  pane_picker_window_style = 'fg=colour16,bg=colour226,bold',
+  pane_picker_window_format = '>>> #I:#W <<<',
+  pane_preview_lines = 20,
   agents = {
     claude = {
       label = 'Claude Code',
@@ -118,6 +121,54 @@ local function agent_names()
   return names
 end
 
+local function default_agent_path()
+  if M.options.default_agent_file and M.options.default_agent_file ~= '' then
+    return M.options.default_agent_file
+  end
+
+  return vim.fn.stdpath('state') .. '/agent_harness/default_agent'
+end
+
+local function load_default_agent()
+  local path = default_agent_path()
+  if vim.fn.filereadable(path) ~= 1 then
+    return
+  end
+
+  local lines = vim.fn.readfile(path, '', 1)
+  local name = trim(lines[1] or '')
+  if name == '' then
+    return
+  end
+
+  if name and resolve_agent_config(name) then
+    state.current_agent = name
+  end
+end
+
+local function save_default_agent(name)
+  local path = default_agent_path()
+  local directory = vim.fn.fnamemodify(path, ':h')
+  vim.fn.mkdir(directory, 'p')
+  vim.fn.writefile({ name }, path)
+end
+
+local function set_default_agent(name, persist)
+  local resolved_name = resolve_agent_config(name)
+  if not resolved_name then
+    return false
+  end
+
+  state.current_agent = resolved_name
+  M.options.default_agent = resolved_name
+
+  if persist then
+    save_default_agent(resolved_name)
+  end
+
+  return true
+end
+
 local function normalize_agent_arg(arg)
   arg = trim(arg)
   if arg == '' then
@@ -142,6 +193,7 @@ local function ensure_current_agent()
 end
 
 local function resolve_agent(name)
+  local use_default = name == nil
   name = name or ensure_current_agent()
   if not name then
     notify('No agent harnesses are configured', vim.log.levels.ERROR)
@@ -156,7 +208,10 @@ local function resolve_agent(name)
     return nil, nil
   end
 
-  state.current_agent = name
+  if use_default then
+    state.current_agent = name
+  end
+
   return name, agent
 end
 
@@ -658,6 +713,106 @@ local function pane_in_current_window(pane)
   return not window or pane.window_id == window
 end
 
+local function marked_pane()
+  for _, pane in ipairs(list_panes()) do
+    if pane.marked then
+      return pane.id
+    end
+  end
+
+  return nil
+end
+
+local function clear_marked_pane()
+  system({ 'tmux', 'select-pane', '-M' })
+end
+
+local function mark_pane(pane)
+  if pane and pane ~= '' and pane_alive(pane) then
+    system({ 'tmux', 'select-pane', '-m', '-t', pane })
+  else
+    clear_marked_pane()
+  end
+end
+
+local function restore_marked_pane(pane)
+  clear_marked_pane()
+  if pane and pane_alive(pane) then
+    mark_pane(pane)
+  end
+end
+
+local window_highlight_style_options = {
+  'window-status-style',
+  'window-status-current-style',
+}
+
+local window_highlight_format_options = {
+  'window-status-format',
+  'window-status-current-format',
+}
+
+local function snapshot_window_option(window, option)
+  local ok, output = system({ 'tmux', 'show-options', '-w', '-q', '-v', '-t', window, option })
+  if not ok or output == '' then
+    return { set = false }
+  end
+
+  return {
+    set = true,
+    value = output,
+  }
+end
+
+local function restore_window_highlight(state)
+  for window, options in pairs(state.snapshots or {}) do
+    for option, snapshot in pairs(options) do
+      if snapshot.set then
+        system({ 'tmux', 'set-option', '-w', '-q', '-t', window, option, snapshot.value })
+      else
+        system({ 'tmux', 'set-option', '-w', '-q', '-u', '-t', window, option })
+      end
+    end
+  end
+
+  state.window = nil
+  state.snapshots = {}
+end
+
+local function highlight_window(window, state)
+  if state.window == window then
+    return
+  end
+
+  restore_window_highlight(state)
+  if not window or window == '' then
+    return
+  end
+
+  local style = trim(M.options.pane_picker_window_style)
+  local format = trim(M.options.pane_picker_window_format)
+  if style == '' and format == '' then
+    return
+  end
+
+  state.window = window
+  state.snapshots[window] = {}
+
+  for _, option in ipairs(window_highlight_style_options) do
+    if style ~= '' then
+      state.snapshots[window][option] = snapshot_window_option(window, option)
+      system({ 'tmux', 'set-option', '-w', '-q', '-t', window, option, style })
+    end
+  end
+
+  for _, option in ipairs(window_highlight_format_options) do
+    if format ~= '' then
+      state.snapshots[window][option] = snapshot_window_option(window, option)
+      system({ 'tmux', 'set-option', '-w', '-q', '-t', window, option, format })
+    end
+  end
+end
+
 local function find_agent_panes(agent_name, agent)
   local panes = {}
   for _, pane in ipairs(list_panes()) do
@@ -667,6 +822,45 @@ local function find_agent_panes(agent_name, agent)
       table.insert(panes, pane)
     end
   end
+
+  return panes
+end
+
+local function find_all_agent_panes()
+  local panes = {}
+  local seen = {}
+
+  for _, agent_name in ipairs(agent_names()) do
+    local _, agent = resolve_agent_config(agent_name)
+    for _, pane in ipairs(find_agent_panes(agent_name, agent)) do
+      if not seen[pane.id] then
+        seen[pane.id] = true
+        pane.harness_agent_name = agent_name
+        pane.harness_agent = agent
+        pane.harness_agent_label = agent.label or agent_name
+        table.insert(panes, pane)
+      end
+    end
+  end
+
+  local current_window = current_window_id()
+  local function is_current_window(pane)
+    return not current_window or pane.window_id == current_window
+  end
+
+  table.sort(panes, function(left, right)
+    local left_current = is_current_window(left)
+    local right_current = is_current_window(right)
+    if left_current ~= right_current then
+      return left_current
+    end
+
+    if left.location ~= right.location then
+      return left.location < right.location
+    end
+
+    return left.harness_agent_label < right.harness_agent_label
+  end)
 
   return panes
 end
@@ -756,6 +950,228 @@ local function pane_choice_label(choice)
   return pane.id .. '  ' .. pane.location .. '  ' .. command .. mode .. '  ' .. path
 end
 
+local function open_agent_choice_label(choice)
+  if choice.start_new then
+    return 'New ' .. choice.label .. ' (' .. choice.command .. ')'
+  end
+
+  local pane = choice.pane
+  local path = pane.current_path ~= '' and vim.fn.fnamemodify(pane.current_path, ':~') or '-'
+  local command = pane.current_command ~= '' and pane.current_command or pane.start_command
+  local mode = pane.agent_match_kind == 'possible' and '  [mode unknown]' or ''
+  return choice.label .. '  ' .. pane.id .. '  ' .. pane.location .. '  ' .. command .. mode .. '  ' .. path
+end
+
+local function choice_preview_lines(choice)
+  if not choice then
+    return { '' }
+  end
+
+  if choice.start_new then
+    local lines = { 'Start new ' .. choice.label .. ' pane' }
+    local command = choice.command
+    if not command and choice.agent then
+      command = agent_command_display(choice.agent)
+    end
+
+    if command and command ~= '' then
+      table.insert(lines, command)
+    end
+
+    return lines
+  end
+
+  local pane = choice.pane
+  if not pane or not pane.id then
+    return { 'No pane selected' }
+  end
+
+  local line_limit = tonumber(M.options.pane_preview_lines or M.options.pane_preview_history_lines) or 20
+  line_limit = math.max(1, math.floor(line_limit))
+
+  local ok, output = system({ 'tmux', 'capture-pane', '-p', '-t', pane.id })
+  if not ok then
+    return {
+      'Unable to capture ' .. pane.id,
+      output,
+    }
+  end
+
+  local captured = vim.split(output, '\n', { plain = true, trimempty = false })
+  while #captured > 1 and captured[#captured] == '' do
+    table.remove(captured)
+  end
+
+  local lines = {}
+  local start = math.max(1, #captured - line_limit + 1)
+  for index = start, #captured do
+    table.insert(lines, captured[index])
+  end
+
+  while #lines > 1 and trim(lines[1]) == '' do
+    table.remove(lines)
+  end
+
+  if #lines == 0 then
+    lines = { '' }
+  end
+
+  local command = pane.current_command ~= '' and pane.current_command or pane.start_command
+  local label = choice.label or pane.harness_agent_label
+  local header = (label and (label .. '  ') or '') .. pane.id .. '  ' .. pane.location .. '  ' .. command
+  table.insert(lines, 1, string.rep('-', math.max(20, #header)))
+  table.insert(lines, 1, header)
+  return lines
+end
+
+local function preview_choice(choice, preview_state)
+  local pane = choice and choice.pane
+  local pane_id = pane and pane.id or nil
+  mark_pane(pane_id)
+  highlight_window(pane and pane.window_id or nil, preview_state.window_highlight)
+  return choice_preview_lines(choice)
+end
+
+local function telescope_ui_select_active()
+  local info = debug.getinfo(vim.ui.select, 'S')
+  local source = info and info.source or ''
+  return source:find('telescope/_extensions/ui-select.lua', 1, true) ~= nil
+end
+
+local function telescope_select_with_preview(choices, opts, on_choice)
+  if not telescope_ui_select_active() then
+    return false
+  end
+
+  local ok, pickers = pcall(require, 'telescope.pickers')
+  if not ok then
+    return false
+  end
+
+  local finders = require('telescope.finders')
+  local previewers = require('telescope.previewers')
+  local conf = require('telescope.config').values
+  local actions = require('telescope.actions')
+  local action_state = require('telescope.actions.state')
+  local previous_mark = marked_pane()
+  local preview_state = { window_highlight = { snapshots = {} } }
+  local finished = false
+  local selected = false
+  local last_previewed = nil
+  local timer = vim.uv.new_timer()
+
+  local function stop_timer()
+    if timer then
+      timer:stop()
+      timer:close()
+      timer = nil
+    end
+  end
+
+  local function finish(choice)
+    if finished then
+      return
+    end
+
+    finished = true
+    stop_timer()
+    restore_window_highlight(preview_state.window_highlight)
+    restore_marked_pane(previous_mark)
+    vim.schedule(function()
+      on_choice(choice)
+    end)
+  end
+
+  local function sync_preview(prompt_bufnr)
+    local picker = action_state.get_current_picker(prompt_bufnr)
+    local entry = picker and picker:get_selection()
+    local choice = entry and entry.value or nil
+    if choice == last_previewed then
+      return
+    end
+
+    last_previewed = choice
+    preview_choice(choice, preview_state)
+  end
+
+  pickers
+    .new({}, {
+      prompt_title = opts.prompt or 'Select one of',
+      finder = finders.new_table({
+        results = choices,
+        entry_maker = function(choice)
+          local label = opts.format_item and opts.format_item(choice) or tostring(choice)
+          return {
+            value = choice,
+            display = label,
+            ordinal = label,
+          }
+        end,
+      }),
+      previewer = previewers.new_buffer_previewer({
+        title = 'agent pane',
+        define_preview = function(self, entry)
+          local lines = choice_preview_lines(entry and entry.value or nil)
+          vim.bo[self.state.bufnr].modifiable = true
+          vim.bo[self.state.bufnr].filetype = 'text'
+          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
+          vim.bo[self.state.bufnr].modifiable = false
+        end,
+      }),
+      sorter = conf.generic_sorter({}),
+      attach_mappings = function(prompt_bufnr)
+        timer:start(
+          50,
+          100,
+          vim.schedule_wrap(function()
+            if not finished then
+              pcall(sync_preview, prompt_bufnr)
+            end
+          end)
+        )
+
+        actions.select_default:replace(function()
+          selected = true
+          local entry = action_state.get_selected_entry()
+          actions.close(prompt_bufnr)
+          finish(entry and entry.value or nil)
+        end)
+
+        actions.close:enhance({
+          post = function()
+            if not selected then
+              finish(nil)
+            end
+          end,
+        })
+
+        return true
+      end,
+    })
+    :find()
+
+  return true
+end
+
+local function select_with_preview(choices, opts, on_choice)
+  local previous_mark = marked_pane()
+  local preview_state = { window_highlight = { snapshots = {} } }
+
+  opts.preview_item = function(choice)
+    return preview_choice(choice, preview_state)
+  end
+
+  if telescope_select_with_preview(choices, opts, on_choice) then
+    return
+  end
+
+  vim.ui.select(choices, opts, function(choice)
+    restore_window_highlight(preview_state.window_highlight)
+    restore_marked_pane(previous_mark)
+    on_choice(choice)
+  end)
+end
+
 local function select_pane(agent_name, agent, panes, on_choice)
   local choices = {}
   for _, pane in ipairs(panes) do
@@ -771,12 +1187,141 @@ local function select_pane(agent_name, agent, panes, on_choice)
   })
 
   local prompt = 'Select ' .. (agent.label or agent_name) .. ' pane'
-  vim.ui.select(choices, {
+  select_with_preview(choices, {
+    kind = 'agent_harness_pane',
     prompt = prompt,
     format_item = pane_choice_label,
   }, function(choice)
     on_choice(choice)
   end)
+end
+
+local function select_open_agent(panes, on_choice)
+  local choices = {}
+  for _, pane in ipairs(panes) do
+    table.insert(choices, {
+      pane = pane,
+      agent_name = pane.harness_agent_name,
+      agent = pane.harness_agent,
+      label = pane.harness_agent_label,
+    })
+  end
+
+  for _, agent_name in ipairs(agent_names()) do
+    local _, agent = resolve_agent_config(agent_name)
+    table.insert(choices, {
+      start_new = true,
+      agent_name = agent_name,
+      agent = agent,
+      label = agent.label or agent_name,
+      command = agent_command_display(agent),
+    })
+  end
+
+  select_with_preview(choices, {
+    kind = 'agent_harness_open_agent',
+    prompt = 'Open agent',
+    format_item = open_agent_choice_label,
+  }, function(choice)
+    on_choice(choice)
+  end)
+end
+
+local function use_open_agent_choice(choice, on_pane, start_prompt)
+  if not choice then
+    on_pane(nil)
+    return
+  end
+
+  local agent_name = choice.agent_name
+  local agent = choice.agent
+  if not agent_name or not agent then
+    on_pane(nil)
+    return
+  end
+
+  if choice.start_new then
+    local pane, new_pane, prompt_sent = start_pane(agent_name, agent, start_prompt)
+    on_pane(agent_name, agent, pane, new_pane, prompt_sent)
+    return
+  end
+
+  local selected_pane = choice.pane and choice.pane.id
+  if pane_alive(selected_pane) then
+    state.pane_by_agent[agent_name] = selected_pane
+    tag_pane(agent_name, selected_pane)
+    on_pane(agent_name, agent, selected_pane, false)
+  else
+    state.pane_by_agent[agent_name] = nil
+    notify('Selected tmux pane is no longer available', vim.log.levels.WARN)
+    select_open_agent(find_all_agent_panes(), function(next_choice)
+      use_open_agent_choice(next_choice, on_pane, start_prompt)
+    end)
+  end
+end
+
+local function get_dwim_agent_pane(opts, on_pane, start_prompt)
+  opts = opts or {}
+  on_pane = on_pane or function() end
+
+  if not tmux_ready() then
+    on_pane(nil)
+    return
+  end
+
+  if opts.force then
+    local agent_name, agent = resolve_agent(nil)
+    if not agent_name then
+      on_pane(nil)
+      return
+    end
+
+    local pane, new_pane, prompt_sent = start_pane(agent_name, agent, start_prompt)
+    on_pane(agent_name, agent, pane, new_pane, prompt_sent)
+    return
+  end
+
+  local panes = find_all_agent_panes()
+  local function choose()
+    select_open_agent(panes, function(choice)
+      use_open_agent_choice(choice, on_pane, start_prompt)
+    end)
+  end
+
+  if opts.choose then
+    choose()
+    return
+  end
+
+  local current_window_panes = {}
+  local current_window = current_window_id()
+  for _, pane in ipairs(panes) do
+    if not current_window or pane.window_id == current_window then
+      table.insert(current_window_panes, pane)
+    end
+  end
+
+  if #current_window_panes == 1 then
+    use_open_agent_choice({
+      pane = current_window_panes[1],
+      agent_name = current_window_panes[1].harness_agent_name,
+      agent = current_window_panes[1].harness_agent,
+      label = current_window_panes[1].harness_agent_label,
+    }, on_pane, start_prompt)
+    return
+  end
+
+  if #current_window_panes == 0 and #panes == 1 then
+    use_open_agent_choice({
+      pane = panes[1],
+      agent_name = panes[1].harness_agent_name,
+      agent = panes[1].harness_agent,
+      label = panes[1].harness_agent_label,
+    }, on_pane, start_prompt)
+    return
+  end
+
+  choose()
 end
 
 local function get_or_start_pane(agent_name, agent, force, on_pane, start_prompt)
@@ -1017,8 +1562,8 @@ function M.select(callback)
       return
     end
 
-    state.current_agent = choice.name
-    notify('Selected ' .. choice.label)
+    set_default_agent(choice.name, true)
+    notify('Default agent: ' .. choice.label)
 
     if callback then
       callback(choice.name, choice.agent)
@@ -1034,23 +1579,17 @@ function M.start(opts)
     return
   end
 
-  get_or_start_pane(agent_name, agent, opts.force, function(pane)
-    if pane then
-      if opts.focus then
-        focus_pane(pane)
-      end
-      notify((agent.label or agent_name) .. ' ready in tmux pane ' .. pane)
+  local pane = start_pane(agent_name, agent, opts.initial_prompt)
+  if pane then
+    if opts.focus then
+      focus_pane(pane)
     end
-  end)
+    notify((agent.label or agent_name) .. ' ready in tmux pane ' .. pane)
+  end
 end
 
 function M.send(opts)
   opts = opts or {}
-
-  local agent_name, agent = resolve_agent(opts.agent)
-  if not agent_name then
-    return
-  end
 
   local context = opts.context
   if context == nil and not opts.no_context then
@@ -1060,7 +1599,7 @@ function M.send(opts)
   local prompt = opts.prompt or build_prompt(opts.instructions or '', context)
   local retried = false
 
-  local function send_to_pane(pane, new_pane, prompt_sent)
+  local function send_to_pane(agent_name, agent, pane, new_pane, prompt_sent)
     if not pane then
       return
     end
@@ -1080,20 +1619,32 @@ function M.send(opts)
 
       retried = true
       state.pane_by_agent[agent_name] = nil
-      get_or_start_pane(agent_name, agent, false, send_to_pane)
+      if opts.agent then
+        get_or_start_pane(agent_name, agent, false, function(next_pane, next_new_pane, next_prompt_sent)
+          send_to_pane(agent_name, agent, next_pane, next_new_pane, next_prompt_sent)
+        end, prompt)
+      else
+        get_dwim_agent_pane(opts, send_to_pane, prompt)
+      end
     end)
   end
 
-  get_or_start_pane(agent_name, agent, opts.force, send_to_pane, prompt)
+  if opts.agent then
+    local agent_name, agent = resolve_agent(opts.agent)
+    if not agent_name then
+      return
+    end
+
+    get_or_start_pane(agent_name, agent, opts.force, function(pane, new_pane, prompt_sent)
+      send_to_pane(agent_name, agent, pane, new_pane, prompt_sent)
+    end, prompt)
+  else
+    get_dwim_agent_pane(opts, send_to_pane, prompt)
+  end
 end
 
 function M.send_context(opts)
   opts = opts or {}
-
-  local agent_name, agent = resolve_agent(opts.agent)
-  if not agent_name then
-    return
-  end
 
   local context = opts.context
   if context == nil then
@@ -1109,7 +1660,7 @@ function M.send_context(opts)
   prompt = prompt .. '\n\n'
   local retried = false
 
-  local function stage_in_pane(pane, new_pane)
+  local function stage_in_pane(agent_name, agent, pane, new_pane)
     if not pane then
       return
     end
@@ -1125,26 +1676,52 @@ function M.send_context(opts)
 
       retried = true
       state.pane_by_agent[agent_name] = nil
-      get_or_start_pane(agent_name, agent, false, stage_in_pane)
+      if opts.agent then
+        get_or_start_pane(agent_name, agent, false, function(next_pane, next_new_pane)
+          stage_in_pane(agent_name, agent, next_pane, next_new_pane)
+        end)
+      else
+        get_dwim_agent_pane(opts, stage_in_pane)
+      end
     end)
   end
 
-  get_or_start_pane(agent_name, agent, opts.force, stage_in_pane)
+  if opts.agent then
+    local agent_name, agent = resolve_agent(opts.agent)
+    if not agent_name then
+      return
+    end
+
+    get_or_start_pane(agent_name, agent, opts.force, function(pane, new_pane)
+      stage_in_pane(agent_name, agent, pane, new_pane)
+    end)
+  else
+    get_dwim_agent_pane(opts, stage_in_pane)
+  end
 end
 
 function M.switch(opts)
   opts = opts or {}
 
-  local agent_name, agent = resolve_agent(opts.agent)
-  if not agent_name then
-    return
-  end
-
-  get_or_start_pane(agent_name, agent, opts.force, function(pane)
+  local function switch_to_pane(agent_name, agent, pane)
     if pane and focus_pane(pane) then
       notify('Switched to ' .. (agent.label or agent_name))
     end
-  end)
+  end
+
+  if opts.agent then
+    local agent_name, agent = resolve_agent(opts.agent)
+    if not agent_name then
+      return
+    end
+
+    get_or_start_pane(agent_name, agent, opts.force, function(pane)
+      switch_to_pane(agent_name, agent, pane)
+    end)
+  else
+    local switch_opts = vim.tbl_extend('force', opts, { choose = true })
+    get_dwim_agent_pane(switch_opts, switch_to_pane)
+  end
 end
 
 local function create_commands()
@@ -1158,12 +1735,10 @@ local function create_commands()
   vim.api.nvim_create_user_command('AgentStart', function(args)
     M.start({
       agent = normalize_agent_arg(args.args),
-      force = args.bang,
     })
   end, {
-    bang = true,
     complete = agent_names,
-    desc = 'Start the selected terminal agent harness in tmux',
+    desc = 'Start a new terminal agent harness in tmux',
     force = true,
     nargs = '?',
   })
@@ -1231,6 +1806,7 @@ end
 
 function M.setup(opts)
   M.options = vim.tbl_deep_extend('force', vim.deepcopy(defaults), opts or {})
+  load_default_agent()
   ensure_current_agent()
 
   if not state.did_setup then
